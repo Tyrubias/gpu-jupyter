@@ -7,7 +7,7 @@
 
 # Use NVIDIA CUDA as base image and run the same installation as in the other packages.
 # The version of cudatoolkit must match those of the base image, see Dockerfile.pytorch
-FROM nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04
+FROM nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04 AS builder
 LABEL authors="Christoph Schranz <christoph.schranz@salzburgresearch.at>, Mathematical Michael <consistentbayes@gmail.com>"
 # This is a concatenated Dockerfile, the maintainers of subsequent sections may vary.
 RUN chmod 1777 /tmp && chmod 1777 /var/tmp
@@ -23,7 +23,6 @@ FROM builder AS base
 # Ubuntu 20.04 (focal)
 # https://hub.docker.com/_/ubuntu/?tab=tags&name=focal
 # OS/ARCH: linux/amd64
-ARG ROOT_CONTAINER=ubuntu:focal-20210416@sha256:86ac87f73641c920fb42cc9612d4fb57b5626b56ea2a19b894d0673fd5b4f2e9
 
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
@@ -398,7 +397,7 @@ LABEL maintainer="Christoph Schranz <christoph.schranz@salzburgresearch.at>"
 # Install Tensorflow, check compatibility here:
 # https://www.tensorflow.org/install/source#gpu
 # installation via conda leads to errors in version 4.8.2
-RUN pip install --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir "tensorflow==2.5.0rc3" && \
     pip install --no-cache-dir keras
 

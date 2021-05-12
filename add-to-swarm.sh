@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-cd $(cd -P -- "$(dirname -- "$0")" && pwd -P)
+cd $(cd -P -- "$(dirname -- "$0")" && pwd -P) || exit
 
 # Fetching port and network as input
 PORT=8888
