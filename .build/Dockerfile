@@ -7,7 +7,7 @@
 
 # Use NVIDIA CUDA as base image and run the same installation as in the other packages.
 # The version of cudatoolkit must match those of the base image, see Dockerfile.pytorch
-FROM nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04 AS base
+FROM nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04
 LABEL authors="Christoph Schranz <christoph.schranz@salzburgresearch.at>, Mathematical Michael <consistentbayes@gmail.com>"
 # This is a concatenated Dockerfile, the maintainers of subsequent sections may vary.
 RUN chmod 1777 /tmp && chmod 1777 /var/tmp
@@ -16,6 +16,7 @@ RUN chmod 1777 /tmp && chmod 1777 /var/tmp
 #################### Dependency: jupyter/base-image ########################
 ############################################################################
 
+FROM builder AS base
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 
@@ -186,9 +187,9 @@ WORKDIR $HOME
 ################# Dependency: jupyter/minimal-notebook #####################
 ############################################################################
 
+FROM base AS minimal
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
-FROM base AS minimal
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 
@@ -225,9 +226,9 @@ USER $NB_UID
 ################# Dependency: jupyter/scipy-notebook #######################
 ############################################################################
 
+FROM minimal AS scipy
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
-FROM minimal AS scipy
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 
@@ -292,13 +293,13 @@ USER $NB_UID
 
 WORKDIR $HOME
 
-  ############################################################################
-  ################ Dependency: jupyter/datascience-notebook ##################
-  ############################################################################
+############################################################################
+################ Dependency: jupyter/datascience-notebook ##################
+############################################################################
   
+FROM scipy AS datascience
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
-FROM scipy AS datascience
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 
@@ -390,8 +391,8 @@ WORKDIR $HOME
 ############################################################################
 ########################## Dependency: gpulibs #############################
 ############################################################################
-FROM datascience AS gpu
 
+FROM datascience AS gpu
 LABEL maintainer="Christoph Schranz <christoph.schranz@salzburgresearch.at>"
 
 # Install Tensorflow, check compatibility here:
@@ -434,11 +435,11 @@ RUN fix-permissions /home/$NB_USER
 
 USER $NB_UID
 
-  ############################################################################
-  ############################ Useful packages ###############################
-  ############################################################################
-FROM gpu AS useful
+############################################################################
+############################ Useful packages ###############################
+############################################################################
   
+FROM gpu AS useful
 LABEL authors="Christoph Schranz <christoph.schranz@salzburgresearch.at>, Mathematical Michael <consistentbayes@gmail.com>"
 
 USER root
@@ -484,7 +485,6 @@ RUN fix-permissions /home/$NB_USER
 USER $NB_UID
 
 FROM useful AS final
-
 # Copy jupyter_notebook_config.json
 COPY jupyter_notebook_config.json /etc/jupyter/
 COPY jupyterlab_theme.json "/home/${NB_USER}/jupyterlab_theme.json"
