@@ -405,8 +405,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN conda install --quiet --yes \
     pyyaml mkl mkl-include setuptools cmake cffi typing && \
     conda clean --all -f -y && \
-    fix-permissions $CONDA_DIR && \
-    fix-permissions /home/$NB_USER
+    fix-permissions "$CONDA_DIR" && \
+    fix-permissions "/home/$NB_USER"
 
 # Check compatibility here:
 # https://pytorch.org/get-started/locally/
@@ -420,7 +420,7 @@ USER root
 
 # Install nvtop to monitor the gpu tasks
 RUN apt-get update && \
-    apt-get install -y cmake libncurses5-dev libncursesw5-dev git && \
+    apt-get install --no-install-recommends -y cmake libncurses5-dev libncursesw5-dev git && \
     rm -rf /var/lib/apt/lists/*
 
 RUN git clone https://github.com/Syllo/nvtop.git /run/nvtop && \
@@ -430,7 +430,7 @@ RUN git clone https://github.com/Syllo/nvtop.git /run/nvtop && \
     (make install 2> /dev/null || echo "make install was not successful") && \
     cd /tmp && rm -rf /tmp/nvtop
 
-RUN fix-permissions /home/$NB_USER
+RUN fix-permissions "/home/$NB_USER"
 
 USER $NB_UID
 
@@ -446,8 +446,8 @@ USER root
 RUN conda install --quiet --yes \
     black isort jupyterlab_code_formatter && \
     conda clean --all -f -y && \
-    fix-permissions $CONDA_DIR && \
-    fix-permissions /home/$NB_USER
+    fix-permissions "$CONDA_DIR" && \
+    fix-permissions "/home/$NB_USER"
 
 RUN pip install --no-cache-dir ipyleaflet "plotly>=4.14.3" "ipywidgets>=7.5"
 
@@ -457,15 +457,16 @@ RUN set -ex \
     graphviz==0.11 \
 ' \
  && apt-get update \
- && apt-get -y install htop apt-utils iputils-ping graphviz libgraphviz-dev openssh-client \
- && pip install --no-cache-dir $buildDeps
+ && apt-get --no-install-recommends -y install htop apt-utils iputils-ping graphviz libgraphviz-dev openssh-client \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir "$buildDeps"
 
 # Install various extensions
-RUN fix-permissions $CONDA_DIR
+RUN fix-permissions "$CONDA_DIR"
 
 # RUN jupyter labextension install @jupyterlab/github
 # RUN pip install jupyterlab-git
-RUN pip install jupyterlab-drawio
+RUN pip install --no-cache-dir jupyterlab-drawio
 RUN jupyter nbextension enable --py --sys-prefix ipyleaflet
 RUN jupyter labextension install jupyterlab-plotly
 RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget
@@ -478,7 +479,7 @@ RUN pip install --no-cache-dir jupyter_contrib_nbextensions \
 #  jupyter nbextension enable codefolding/main
 RUN jupyter labextension install @ijmbarr/jupyterlab_spellchecker
 
-RUN fix-permissions /home/$NB_USER
+RUN fix-permissions "/home/$NB_USER"
 
 # Switch back to jovyan to avoid accidental container runs as root
 USER $NB_UID
