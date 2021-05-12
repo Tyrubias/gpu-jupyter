@@ -142,9 +142,11 @@ if [[ "$USE_PASSWORD" == 1 ]]; then
 fi
 
 cp src/jupyter_notebook_config.json .build/
+cp src/jupyterlab_theme.json .build/
 echo >> $DOCKERFILE
 echo "# Copy jupyter_notebook_config.json" >> $DOCKERFILE
 echo "COPY jupyter_notebook_config.json /etc/jupyter/"  >> $DOCKERFILE
+echo "COPY jupyterlab_theme.json \"/home/\${NB_USER}/jupyterlab_theme.json\"" >> $DOCKERFILE
 
 # Set environment variables
 export JUPYTER_UID=$(id -u)
