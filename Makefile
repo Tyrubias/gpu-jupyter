@@ -8,7 +8,7 @@ export DOCKER_BUILDKIT := 1
 .PHONY: config
 
 build: $(shell find $(BUILD_DIR) -maxdepth 1 -type f)
-	docker build --rm --force-rm -t gpu-playground:latest ./.build/
+	docker build --rm --force-rm -t ghcr.io/tyrubias/gpu-playground:latest ./.build/
 
 # Uses trick from https://stackoverflow.com/a/33594470
 config: $(BUILD_DIR)
@@ -21,3 +21,6 @@ clean:
 
 cleanall:
 	rm -rf $(BUILD_DIR)
+
+pushall:
+	docker push --all-tags ghcr.io/tyrubias/gpu-playground
