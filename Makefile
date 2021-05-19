@@ -20,10 +20,10 @@ $(BUILD_DIR): $(shell find ./src/ -type f)
 	./generate-Dockerfile.sh -c $(STACKS_COMMIT_HASH) --password $(JUPYTER_PASSWORD)
 
 clean:
-	docker rmi $(REPOSITORY):$(TAG)
+	-docker rmi $(REPOSITORY):$(TAG)
 
 cleanall: clean
-	rm -rf $(BUILD_DIR)
+	-rm -rf $(BUILD_DIR)
 
 pushall:
-	docker push --all-tags $(REPOSITORY):$(TAG)
+	docker push --all-tags $(REPOSITORY)

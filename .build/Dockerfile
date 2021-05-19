@@ -62,6 +62,7 @@ ARG miniforge_checksum="d4065b376f81b83cfef0c7316f97bb83337e4ae27eb988828363a578
 ENV DEBIAN_FRONTEND noninteractive
 RUN apt-get -q update && \
     apt-get install -yq --no-install-recommends \
+    tini \
     wget \
     ca-certificates \
     sudo \
@@ -131,10 +132,8 @@ RUN wget --quiet "https://github.com/conda-forge/miniforge/releases/download/${m
     conda list python | grep '^python ' | tr -s ' ' | cut -d '.' -f 1,2 | sed 's/$/.*/' >> $CONDA_DIR/conda-meta/pinned && \
     conda install --quiet --yes \
     "conda=${CONDA_VERSION}" \
-    'pip' \
-    'tini=0.18.0' && \
+    'pip' && \
     conda update --all --quiet --yes && \
-    conda list tini | grep tini | tr -s ' ' | cut -d ' ' -f 1,2 >> $CONDA_DIR/conda-meta/pinned && \
     conda clean --all -f -y && \
     rm -rf /home/$NB_USER/.cache/yarn && \
     fix-permissions $CONDA_DIR && \
@@ -148,8 +147,8 @@ RUN wget --quiet "https://github.com/conda-forge/miniforge/releases/download/${m
 # files across image layers when the permissions change
 RUN conda install --quiet --yes \
     'notebook=6.3.0' \
-    'jupyterhub=1.4.0' \
-    'jupyterlab=3.0.14' && \
+    'jupyterhub=1.4.1' \
+    'jupyterlab=3.0.15' && \
     conda clean --all -f -y && \
     npm cache clean --force && \
     jupyter notebook --generate-config && \
