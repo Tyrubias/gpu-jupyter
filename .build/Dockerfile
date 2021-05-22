@@ -60,8 +60,8 @@ ARG miniforge_checksum="d4065b376f81b83cfef0c7316f97bb83337e4ae27eb988828363a578
 # Install all OS dependencies for notebook server that starts but lacks all
 # features (e.g., download as all possible file formats)
 ENV DEBIAN_FRONTEND noninteractive
-RUN apt-get -q update && \
-    apt-get install -yq --no-install-recommends \
+RUN apt-get update --yes && \
+    apt-get install --yes --no-install-recommends \
     tini \
     wget \
     ca-certificates \
@@ -194,7 +194,8 @@ LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 USER root
 
 # Install all OS dependencies for fully functional notebook server
-RUN apt-get update && apt-get install -yq --no-install-recommends \
+RUN apt-get update --yes && \
+    apt-get install --yes --no-install-recommends \
     build-essential \
     vim-tiny \
     git \
@@ -211,8 +212,8 @@ RUN apt-get update && apt-get install -yq --no-install-recommends \
     # ----
     tzdata \
     unzip \
-    nano-tiny \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    nano-tiny && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create alternative for nano -> nano-tiny
 RUN update-alternatives --install /usr/bin/nano nano /bin/nano-tiny 10
@@ -233,8 +234,8 @@ LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 USER root
 
 # ffmpeg for matplotlib anim & dvipng+cm-super for latex labels
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg dvipng cm-super && \
+RUN apt-get update --yes && \
+    apt-get install --yes --no-install-recommends ffmpeg dvipng cm-super && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 USER $NB_UID
@@ -292,105 +293,10 @@ USER $NB_UID
 WORKDIR $HOME
 
 ############################################################################
-################ Dependency: jupyter/datascience-notebook ##################
-############################################################################
-  
-FROM scipy AS datascience
-# Copyright (c) Jupyter Development Team.
-# Distributed under the terms of the Modified BSD License.
-
-LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
-
-# Fix DL4006
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-USER root
-
-# Julia installation
-# Default values can be overridden at build time
-# (ARGS are in lower case to distinguish them from ENV)
-# Check https://julialang.org/downloads/
-ARG julia_version="1.6.0"
-# SHA256 checksum
-ARG julia_checksum="463b71dc70ca7094c0e0fd6d55d130051a7901e8dec5eb44d6002c57d1bd8585"
-
-# R pre-requisites
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    fonts-dejavu \
-    gfortran \
-    gcc && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Julia dependencies
-# install Julia packages in /opt/julia instead of $HOME
-ENV JULIA_DEPOT_PATH=/opt/julia \
-    JULIA_PKGDIR=/opt/julia \
-    JULIA_VERSION="${julia_version}"
-
-WORKDIR /tmp
-
-# hadolint ignore=SC2046
-RUN mkdir "/opt/julia-${JULIA_VERSION}" && \
-    wget -q https://julialang-s3.julialang.org/bin/linux/x64/$(echo "${JULIA_VERSION}" | cut -d. -f 1,2)"/julia-${JULIA_VERSION}-linux-x86_64.tar.gz" && \
-    echo "${julia_checksum} *julia-${JULIA_VERSION}-linux-x86_64.tar.gz" | sha256sum -c - && \
-    tar xzf "julia-${JULIA_VERSION}-linux-x86_64.tar.gz" -C "/opt/julia-${JULIA_VERSION}" --strip-components=1 && \
-    rm "/tmp/julia-${JULIA_VERSION}-linux-x86_64.tar.gz" && \
-    ln -fs /opt/julia-*/bin/julia /usr/local/bin/julia
-
-# Show Julia where conda libraries are \
-RUN mkdir /etc/julia && \
-    echo "push!(Libdl.DL_LOAD_PATH, \"$CONDA_DIR/lib\")" >> /etc/julia/juliarc.jl && \
-    # Create JULIA_PKGDIR \
-    mkdir "${JULIA_PKGDIR}" && \
-    chown "${NB_USER}" "${JULIA_PKGDIR}" && \
-    fix-permissions "${JULIA_PKGDIR}"
-
-USER $NB_UID
-
-# R packages including IRKernel which gets installed globally.
-RUN conda install --quiet --yes \
-    'r-base=4.0.3'  \
-    'r-caret=6.0*' \
-    'r-crayon=1.4*' \
-    'r-devtools=2.4*' \
-    'r-forecast=8.14*' \
-    'r-hexbin=1.28*' \
-    'r-htmltools=0.5*' \
-    'r-htmlwidgets=1.5*' \
-    'r-irkernel=1.1*' \
-    'r-nycflights13=1.0*' \
-    'r-randomforest=4.6*' \
-    'r-rcurl=1.98*' \
-    'r-rmarkdown=2.7*' \
-    'r-rsqlite=2.2*' \
-    'r-shiny=1.6*' \
-    'r-tidyverse=1.3*' \
-    'rpy2=3.4*' && \
-    conda clean --all -f -y && \
-    fix-permissions "${CONDA_DIR}" && \
-    fix-permissions "/home/${NB_USER}"
-
-# Add Julia packages.
-# Install IJulia as jovyan and then move the kernelspec out
-# to the system share location. Avoids problems with runtime UID change not
-# taking effect properly on the .local folder in the jovyan home dir.
-RUN julia -e 'import Pkg; Pkg.update()' && \
-    julia -e 'import Pkg; Pkg.add("HDF5")' && \
-    julia -e 'using Pkg; pkg"add IJulia"; pkg"precompile"' && \
-    # move kernelspec out of home \
-    mv "${HOME}/.local/share/jupyter/kernels/julia"* "${CONDA_DIR}/share/jupyter/kernels/" && \
-    chmod -R go+rx "${CONDA_DIR}/share/jupyter" && \
-    rm -rf "${HOME}/.local" && \
-    fix-permissions "${JULIA_PKGDIR}" "${CONDA_DIR}/share/jupyter"
-
-WORKDIR $HOME
-
-############################################################################
 ########################## Dependency: gpulibs #############################
 ############################################################################
 
-FROM datascience AS gpu
+FROM scipy AS gpu
 LABEL maintainer="Christoph Schranz <christoph.schranz@salzburgresearch.at>"
 
 # Install Tensorflow, check compatibility here:
@@ -433,57 +339,7 @@ RUN fix-permissions "/home/$NB_USER"
 
 USER $NB_UID
 
-############################################################################
-############################ Useful packages ###############################
-############################################################################
-  
-FROM gpu AS useful
-LABEL authors="Christoph Schranz <christoph.schranz@salzburgresearch.at>, Mathematical Michael <consistentbayes@gmail.com>"
-
-USER root
-
-RUN conda install --quiet --yes \
-    black isort jupyterlab_code_formatter && \
-    conda clean --all -f -y && \
-    fix-permissions "$CONDA_DIR" && \
-    fix-permissions "/home/$NB_USER"
-
-RUN pip install --no-cache-dir ipyleaflet "plotly>=4.14.3" "ipywidgets>=7.5"
-
-# Install important packages and Graphviz
-RUN set -ex \
- && buildDeps=' \
-    graphviz==0.11 \
-' \
- && apt-get update \
- && apt-get --no-install-recommends -y install htop apt-utils iputils-ping graphviz libgraphviz-dev openssh-client \
- && rm -rf /var/lib/apt/lists/* \
- && pip install --no-cache-dir "$buildDeps"
-
-# Install various extensions
-RUN fix-permissions "$CONDA_DIR"
-
-# RUN jupyter labextension install @jupyterlab/github
-# RUN pip install jupyterlab-git
-RUN pip install --no-cache-dir jupyterlab-drawio
-RUN jupyter nbextension enable --py --sys-prefix ipyleaflet
-RUN jupyter labextension install jupyterlab-plotly
-RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget
-# RUN pip install --no-cache-dir jupyter-tabnine  --user && \
-#   jupyter nbextension install --py jupyter_tabnine --user && \
-#   jupyter nbextension enable --py jupyter_tabnine --user && \
-#   jupyter serverextension enable --py jupyter_tabnine --user
-RUN pip install --no-cache-dir jupyter_contrib_nbextensions \
-  jupyter_nbextensions_configurator rise
-#  jupyter nbextension enable codefolding/main
-RUN jupyter labextension install @ijmbarr/jupyterlab_spellchecker
-
-RUN fix-permissions "/home/$NB_USER"
-
-# Switch back to jovyan to avoid accidental container runs as root
-USER $NB_UID
-
-FROM useful AS final
+FROM gpu AS final
 # Copy jupyter_notebook_config.json
 COPY jupyter_notebook_config.json /etc/jupyter/
 COPY jupyterlab_theme.json "/home/${NB_USER}/jupyterlab_theme.json"

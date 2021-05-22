@@ -16,8 +16,10 @@ build: $(shell find $(BUILD_DIR) -maxdepth 1 -type f)
 # Uses trick from https://stackoverflow.com/a/33594470
 config: $(BUILD_DIR)
 
+$(BUILD_DIR): DARGS?=
 $(BUILD_DIR): $(shell find ./src/ -type f)
-	./generate-Dockerfile.sh -c $(STACKS_COMMIT_HASH) --password $(JUPYTER_PASSWORD)
+	./generate-Dockerfile.sh -c $(STACKS_COMMIT_HASH) --password $(JUPYTER_PASSWORD) $(DARGS)
+	cp src/.dockerignore $(BUILD_DIR)
 
 clean:
 	-docker rmi $(REPOSITORY):$(TAG)
