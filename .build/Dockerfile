@@ -22,7 +22,6 @@ FROM builder AS base
 
 # Ubuntu 20.04 (focal)
 # https://hub.docker.com/_/ubuntu/?tab=tags&name=focal
-# OS/ARCH: linux/amd64
 
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
@@ -43,19 +42,13 @@ USER root
 ARG conda_version="4.10.2"
 # Miniforge installer patch version
 ARG miniforge_patch_number="0"
-# Miniforge installer architecture
-ARG miniforge_arch="x86_64"
 # Package Manager and Python implementation to use (https://github.com/conda-forge/miniforge)
 # - conda only: either Miniforge3 to use Python or Miniforge-pypy3 to use PyPy
 # - conda + mamba: either Mambaforge to use Python or Mambaforge-pypy3 to use PyPy
 ARG miniforge_python="Mambaforge"
-
 # Miniforge archive to install
 ARG miniforge_version="${conda_version}-${miniforge_patch_number}"
-# Miniforge installer
-ARG miniforge_installer="${miniforge_python}-${miniforge_version}-Linux-${miniforge_arch}.sh"
-# Miniforge checksum
-ARG miniforge_checksum="1e89ee86afa06e23b2478579be16a33fff6cff346314f6a6382fd20b1f83e669"
+
 
 # Install all OS dependencies for notebook server that starts but lacks all
 # features (e.g., download as all possible file formats)
@@ -120,8 +113,16 @@ RUN mkdir "/home/${NB_USER}/work" && \
 WORKDIR /tmp
 
 # Prerequisites installation: conda, mamba, pip, tini
-RUN wget --quiet "https://github.com/conda-forge/miniforge/releases/download/${miniforge_version}/${miniforge_installer}" && \
-    echo "${miniforge_checksum} *${miniforge_installer}" | sha256sum --check && \
+RUN set -x && \
+    # Miniforge installer
+    miniforge_arch=$(uname -m) && \
+    export miniforge_arch && \
+    if [ "$miniforge_arch" == "aarm64" ]; then \
+      miniforge_arch="arm64"; \
+    fi; \
+    miniforge_installer="${miniforge_python}-${miniforge_version}-Linux-${miniforge_arch}.sh" && \
+    export miniforge_installer && \
+    wget --quiet "https://github.com/conda-forge/miniforge/releases/download/${miniforge_version}/${miniforge_installer}" && \
     /bin/bash "${miniforge_installer}" -f -b -p "${CONDA_DIR}" && \
     rm "${miniforge_installer}" && \
     # Conda configuration see https://conda.io/projects/conda/en/latest/configuration.html
@@ -188,6 +189,7 @@ WORKDIR "${HOME}"
 FROM base AS minimal
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
+ARG OWNER=jupyter
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 
@@ -228,6 +230,7 @@ USER ${NB_UID}
 FROM minimal AS scipy
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
+ARG OWNER=jupyter
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 
