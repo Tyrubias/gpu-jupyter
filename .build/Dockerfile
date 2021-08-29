@@ -34,24 +34,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 USER root
 
-# ---- Miniforge installer ----
-# Default values can be overridden at build time
-# (ARGS are in lower case to distinguish them from ENV)
-# Check https://github.com/conda-forge/miniforge/releases
-# Conda version
-ARG conda_version="4.10.2"
-# Miniforge installer patch version
-ARG miniforge_patch_number="0"
-# Package Manager and Python implementation to use (https://github.com/conda-forge/miniforge)
-# - conda only: either Miniforge3 to use Python or Miniforge-pypy3 to use PyPy
-# - conda + mamba: either Mambaforge to use Python or Mambaforge-pypy3 to use PyPy
-ARG miniforge_python="Mambaforge"
-# Miniforge archive to install
-ARG miniforge_version="${conda_version}-${miniforge_patch_number}"
-
-
 # Install all OS dependencies for notebook server that starts but lacks all
 # features (e.g., download as all possible file formats)
+# Install tini: init for containers
 ENV DEBIAN_FRONTEND noninteractive
 RUN apt-get update --yes && \
     apt-get install --yes --no-install-recommends \
@@ -76,9 +61,7 @@ ENV CONDA_DIR=/opt/conda \
     LANG=en_US.UTF-8 \
     LANGUAGE=en_US.UTF-8
 ENV PATH="${CONDA_DIR}/bin:${PATH}" \
-    HOME="/home/${NB_USER}" \
-    CONDA_VERSION="${conda_version}" \
-    MINIFORGE_VERSION="${miniforge_version}"
+    HOME="/home/${NB_USER}"
 
 # Copy a script that we will use to correct permissions after running certain commands
 COPY fix-permissions /usr/local/bin/fix-permissions
@@ -112,28 +95,26 @@ RUN mkdir "/home/${NB_USER}/work" && \
 # Install conda as jovyan and check the sha256 sum provided on the download site
 WORKDIR /tmp
 
-# Prerequisites installation: conda, mamba, pip, tini
+# ---- Miniforge installer ----
+# Check https://github.com/conda-forge/miniforge/releases
+# Package Manager and Python implementation to use (https://github.com/conda-forge/miniforge)
+# We're using Mambaforge installer, possible options:
+# - conda only: either Miniforge3 to use Python or Miniforge-pypy3 to use PyPy
+# - conda + mamba: either Mambaforge to use Python or Mambaforge-pypy3 to use PyPy
+# Installation: conda, mamba, pip
 RUN set -x && \
     # Miniforge installer
     miniforge_arch=$(uname -m) && \
-    export miniforge_arch && \
-    if [ "$miniforge_arch" == "aarm64" ]; then \
-      miniforge_arch="arm64"; \
-    fi; \
-    miniforge_installer="${miniforge_python}-${miniforge_version}-Linux-${miniforge_arch}.sh" && \
-    export miniforge_installer && \
-    wget --quiet "https://github.com/conda-forge/miniforge/releases/download/${miniforge_version}/${miniforge_installer}" && \
+    miniforge_installer="Mambaforge-Linux-${miniforge_arch}.sh" && \
+    wget --quiet "https://github.com/conda-forge/miniforge/releases/latest/download/${miniforge_installer}" && \
     /bin/bash "${miniforge_installer}" -f -b -p "${CONDA_DIR}" && \
     rm "${miniforge_installer}" && \
     # Conda configuration see https://conda.io/projects/conda/en/latest/configuration.html
-    echo "conda ${CONDA_VERSION}" >> "${CONDA_DIR}/conda-meta/pinned" && \
     conda config --system --set auto_update_conda false && \
     conda config --system --set show_channel_urls true && \
-    if [[ "${PYTHON_VERSION}" != "default" ]]; then conda install --yes python="${PYTHON_VERSION}"; fi && \
-    conda list python | grep '^python ' | tr -s ' ' | cut -d ' ' -f 1,2 >> "${CONDA_DIR}/conda-meta/pinned" && \
-    conda install --quiet --yes \
-    "conda=${CONDA_VERSION}" \
-    'pip' && \
+    if [[ "${PYTHON_VERSION}" != "default" ]]; then mamba install --quiet --yes python="${PYTHON_VERSION}"; fi && \
+    mamba list python | grep '^python ' | tr -s ' ' | cut -d ' ' -f 1,2 >> "${CONDA_DIR}/conda-meta/pinned" && \
+    # Using conda to update all packages: https://github.com/mamba-org/mamba/issues/1092
     conda update --all --quiet --yes && \
     conda clean --all -f -y && \
     rm -rf "/home/${NB_USER}/.cache/yarn" && \
@@ -146,11 +127,11 @@ RUN set -x && \
 # Correct permissions
 # Do all this in a single RUN command to avoid duplicating all of the
 # files across image layers when the permissions change
-RUN conda install --quiet --yes \
-    'notebook=6.4.0' \
-    'jupyterhub=1.4.1' \
-    'jupyterlab=3.0.16' && \
-    conda clean --all -f -y && \
+RUN mamba install --quiet --yes \
+    'notebook' \
+    'jupyterhub' \
+    'jupyterlab' && \
+    mamba clean --all -f -y && \
     npm cache clean --force && \
     jupyter notebook --generate-config && \
     jupyter lab clean && \
@@ -244,36 +225,36 @@ RUN apt-get update --yes && \
 USER ${NB_UID}
 
 # Install Python 3 packages
-RUN conda install --quiet --yes \
-    'altair=4.1.*' \
-    'beautifulsoup4=4.9.*' \
-    'bokeh=2.3.*' \
-    'bottleneck=1.3.*' \
-    'cloudpickle=1.6.*' \
+RUN mamba install --quiet --yes \
+    'altair' \
+    'beautifulsoup4' \
+    'bokeh' \
+    'bottleneck' \
+    'cloudpickle' \
     'conda-forge::blas=*=openblas' \
-    'cython=0.29.*' \
-    'dask=2021.6.*' \
-    'dill=0.3.*' \
-    'h5py=3.3.*' \
-    'ipympl=0.7.*'\
-    'ipywidgets=7.6.*' \
-    'matplotlib-base=3.4.*' \
-    'numba=0.53.*' \
-    'numexpr=2.7.*' \
-    'pandas=1.3.*' \
-    'patsy=0.5.*' \
-    'protobuf=3.17.*' \
-    'pytables=3.6.*' \
-    'scikit-image=0.18.*' \
-    'scikit-learn=0.24.*' \
-    'scipy=1.7.*' \
-    'seaborn=0.11.*' \
-    'sqlalchemy=1.4.*' \
-    'statsmodels=0.12.*' \
-    'sympy=1.8.*' \
-    'widgetsnbextension=3.5.*'\
-    'xlrd=2.0.*' && \
-    conda clean --all -f -y && \
+    'cython' \
+    'dask' \
+    'dill' \
+    'h5py' \
+    'ipympl'\
+    'ipywidgets' \
+    'matplotlib-base' \
+    'numba' \
+    'numexpr' \
+    'pandas' \
+    'patsy' \
+    'protobuf' \
+    'pytables' \
+    'scikit-image' \
+    'scikit-learn' \
+    'scipy' \
+    'seaborn' \
+    'sqlalchemy' \
+    'statsmodels' \
+    'sympy' \
+    'widgetsnbextension'\
+    'xlrd' && \
+    mamba clean --all -f -y && \
     fix-permissions "${CONDA_DIR}" && \
     fix-permissions "/home/${NB_USER}"
 
@@ -306,7 +287,7 @@ LABEL maintainer="Christoph Schranz <christoph.schranz@salzburgresearch.at>"
 # https://www.tensorflow.org/install/source#gpu
 # installation via conda leads to errors in version 4.8.2
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir "tensorflow==2.5.0" && \
+    pip install --no-cache-dir "tensorflow==2.6.0" && \
     pip install --no-cache-dir keras
 
 # Install PyTorch with dependencies
