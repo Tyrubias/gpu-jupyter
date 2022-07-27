@@ -7,7 +7,7 @@
 
 # Use NVIDIA CUDA as base image and run the same installation as in the other packages.
 # The version of cudatoolkit must match those of the base image, see Dockerfile.pytorch
-FROM nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04 AS builder
+FROM nvidia/cuda:11.6.2-cudnn8-runtime-ubuntu20.04
 LABEL authors="Christoph Schranz <christoph.schranz@salzburgresearch.at>, Mathematical Michael <consistentbayes@gmail.com>"
 # This is a concatenated Dockerfile, the maintainers of subsequent sections may vary.
 RUN chmod 1777 /tmp && chmod 1777 /var/tmp
@@ -16,12 +16,12 @@ RUN chmod 1777 /tmp && chmod 1777 /var/tmp
 #################### Dependency: jupyter/base-image ########################
 ############################################################################
 
-FROM builder AS base
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 
 # Ubuntu 20.04 (focal)
 # https://hub.docker.com/_/ubuntu/?tab=tags&name=focal
+ARG ROOT_CONTAINER=ubuntu:focal
 
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
@@ -29,24 +29,38 @@ ARG NB_USER="jovyan"
 ARG NB_UID="1000"
 ARG NB_GID="100"
 
-# Fix DL4006
+# Fix: https://github.com/hadolint/hadolint/wiki/DL4006
+# Fix: https://github.com/koalaman/shellcheck/wiki/SC3014
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 USER root
 
 # Install all OS dependencies for notebook server that starts but lacks all
 # features (e.g., download as all possible file formats)
-# Install tini: init for containers
 ENV DEBIAN_FRONTEND noninteractive
 RUN apt-get update --yes && \
+    # - apt-get upgrade is run to patch known vulnerabilities in apt-get packages as
+    #   the ubuntu base image is rebuilt too seldom sometimes (less than once a month)
+    apt-get upgrade --yes && \
     apt-get install --yes --no-install-recommends \
-    tini \
-    wget \
+    # - bzip2 is necessary to extract the micromamba executable.
+    bzip2 \
     ca-certificates \
-    sudo \
-    locales \
     fonts-liberation \
-    run-one && \
+    locales \
+    # - pandoc is used to convert notebooks to html files
+    #   it's not present in arm64 ubuntu image, so we install it here
+    pandoc \
+    # - run-one - a wrapper script that runs no more
+    #   than one unique  instance  of  some  command with a unique set of arguments,
+    #   we use `run-one-constantly` to support `RESTARTABLE` option
+    run-one \
+    sudo \
+    # - tini is installed as a helpful container entrypoint that reaps zombie
+    #   processes and such of the actual executable we want to start, see
+    #   https://github.com/krallin/tini#why-tini for details.
+    tini \
+    wget && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
     locale-gen
@@ -86,54 +100,55 @@ RUN echo "auth requisite pam_deny.so" >> /etc/pam.d/su && \
     fix-permissions "${CONDA_DIR}"
 
 USER ${NB_UID}
-ARG PYTHON_VERSION=default
+
+# Pin python version here, or set it to "default"
+ARG PYTHON_VERSION=3.10
 
 # Setup work directory for backward-compatibility
 RUN mkdir "/home/${NB_USER}/work" && \
     fix-permissions "/home/${NB_USER}"
 
-# Install conda as jovyan and check the sha256 sum provided on the download site
-WORKDIR /tmp
-
-# ---- Miniforge installer ----
-# Check https://github.com/conda-forge/miniforge/releases
-# Package Manager and Python implementation to use (https://github.com/conda-forge/miniforge)
-# We're using Mambaforge installer, possible options:
-# - conda only: either Miniforge3 to use Python or Miniforge-pypy3 to use PyPy
-# - conda + mamba: either Mambaforge to use Python or Mambaforge-pypy3 to use PyPy
-# Installation: conda, mamba, pip
-RUN set -x && \
-    # Miniforge installer
-    miniforge_arch=$(uname -m) && \
-    miniforge_installer="Mambaforge-Linux-${miniforge_arch}.sh" && \
-    wget --quiet "https://github.com/conda-forge/miniforge/releases/latest/download/${miniforge_installer}" && \
-    /bin/bash "${miniforge_installer}" -f -b -p "${CONDA_DIR}" && \
-    rm "${miniforge_installer}" && \
-    # Conda configuration see https://conda.io/projects/conda/en/latest/configuration.html
-    conda config --system --set auto_update_conda false && \
-    conda config --system --set show_channel_urls true && \
-    if [[ "${PYTHON_VERSION}" != "default" ]]; then mamba install --quiet --yes python="${PYTHON_VERSION}"; fi && \
-    mamba list python | grep '^python ' | tr -s ' ' | cut -d ' ' -f 1,2 >> "${CONDA_DIR}/conda-meta/pinned" && \
-    # Using conda to update all packages: https://github.com/mamba-org/mamba/issues/1092
-    conda update --all --quiet --yes && \
-    conda clean --all -f -y && \
-    rm -rf "/home/${NB_USER}/.cache/yarn" && \
-    fix-permissions "${CONDA_DIR}" && \
-    fix-permissions "/home/${NB_USER}"
-
-# Install Jupyter Notebook, Lab, and Hub
+# Download and install Micromamba, and initialize Conda prefix.
+#   <https://github.com/mamba-org/mamba#micromamba>
+#   Similar projects using Micromamba:
+#     - Micromamba-Docker: <https://github.com/mamba-org/micromamba-docker>
+#     - repo2docker: <https://github.com/jupyterhub/repo2docker>
+# Install Python, Mamba, Jupyter Notebook, Lab, and Hub
 # Generate a notebook server config
-# Cleanup temporary files
+# Cleanup temporary files and remove Micromamba
 # Correct permissions
 # Do all this in a single RUN command to avoid duplicating all of the
 # files across image layers when the permissions change
-RUN mamba install --quiet --yes \
-    'notebook' \
-    'jupyterhub' \
-    'jupyterlab' && \
+COPY --chown="${NB_UID}:${NB_GID}" initial-condarc "${CONDA_DIR}/.condarc"
+WORKDIR /tmp
+RUN set -x && \
+    arch=$(uname -m) && \
+    if [ "${arch}" = "x86_64" ]; then \
+        # Should be simpler, see <https://github.com/mamba-org/mamba/issues/1437>
+        arch="64"; \
+    fi && \
+    wget -qO /tmp/micromamba.tar.bz2 \
+        "https://micromamba.snakepit.net/api/micromamba/linux-${arch}/latest" && \
+    tar -xvjf /tmp/micromamba.tar.bz2 --strip-components=1 bin/micromamba && \
+    rm /tmp/micromamba.tar.bz2 && \
+    PYTHON_SPECIFIER="python=${PYTHON_VERSION}" && \
+    if [[ "${PYTHON_VERSION}" == "default" ]]; then PYTHON_SPECIFIER="python"; fi && \
+    # Install the packages
+    ./micromamba install \
+        --root-prefix="${CONDA_DIR}" \
+        --prefix="${CONDA_DIR}" \
+        --yes \
+        "${PYTHON_SPECIFIER}" \
+        'mamba' \
+        'notebook' \
+        'jupyterhub' \
+        'jupyterlab' && \
+    rm micromamba && \
+    # Pin major.minor version of python
+    mamba list python | grep '^python ' | tr -s ' ' | cut -d ' ' -f 1,2 >> "${CONDA_DIR}/conda-meta/pinned" && \
+    jupyter notebook --generate-config && \
     mamba clean --all -f -y && \
     npm cache clean --force && \
-    jupyter notebook --generate-config && \
     jupyter lab clean && \
     rm -rf "/home/${NB_USER}/.cache/yarn" && \
     fix-permissions "${CONDA_DIR}" && \
@@ -148,15 +163,22 @@ CMD ["start-notebook.sh"]
 # Copy local files as late as possible to avoid cache busting
 COPY start.sh start-notebook.sh start-singleuser.sh /usr/local/bin/
 # Currently need to have both jupyter_notebook_config and jupyter_server_config to support classic and lab
-COPY jupyter_notebook_config.py /etc/jupyter/
+COPY jupyter_server_config.py /etc/jupyter/
 
 # Fix permissions on /etc/jupyter as root
 USER root
 
-# Prepare upgrade to JupyterLab V3.0 #1205
-RUN sed -re "s/c.NotebookApp/c.ServerApp/g" \
-    /etc/jupyter/jupyter_notebook_config.py > /etc/jupyter/jupyter_server_config.py && \
+# Legacy for Jupyter Notebook Server, see: [#1205](https://github.com/jupyter/docker-stacks/issues/1205)
+RUN sed -re "s/c.ServerApp/c.NotebookApp/g" \
+    /etc/jupyter/jupyter_server_config.py > /etc/jupyter/jupyter_notebook_config.py && \
     fix-permissions /etc/jupyter/
+
+# HEALTHCHECK documentation: https://docs.docker.com/engine/reference/builder/#healthcheck
+# This healtcheck works well for `lab`, `notebook`, `nbclassic`, `server` and `retro` jupyter commands
+# https://github.com/jupyter/docker-stacks/issues/915#issuecomment-1068528799
+HEALTHCHECK  --interval=15s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -O- --no-verbose --tries=1 --no-check-certificate \
+    http${GEN_CERT:+s}://localhost:8888${JUPYTERHUB_SERVICE_PREFIX:-/}api || exit 1
 
 # Switch back to jovyan to avoid accidental container runs as root
 USER ${NB_UID}
@@ -167,35 +189,39 @@ WORKDIR "${HOME}"
 ################# Dependency: jupyter/minimal-notebook #####################
 ############################################################################
 
-FROM base AS minimal
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 ARG OWNER=jupyter
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 
+# Fix: https://github.com/hadolint/hadolint/wiki/DL4006
+# Fix: https://github.com/koalaman/shellcheck/wiki/SC3014
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 USER root
 
 # Install all OS dependencies for fully functional notebook server
 RUN apt-get update --yes && \
     apt-get install --yes --no-install-recommends \
-    vim-tiny \
+    # Common useful utilities
     git \
-    inkscape \
-    libsm6 \
-    libxext-dev \
-    libxrender1 \
-    lmodern \
-    netcat \
-    openssh-client \
-    # ---- nbconvert dependencies ----
-    texlive-xetex \
-    texlive-fonts-recommended \
-    texlive-plain-generic \
-    # ----
+    nano-tiny \
     tzdata \
     unzip \
-    nano-tiny && \
+    vim-tiny \
+    # Inkscape is installed to be able to convert SVG files
+    inkscape \
+    # git-over-ssh
+    openssh-client \
+    # less is needed to run help in R
+    # see: https://github.com/jupyter/docker-stacks/issues/1588
+    less \
+    # nbconvert dependencies
+    # https://nbconvert.readthedocs.io/en/latest/install.html#installing-tex
+    texlive-xetex \
+    texlive-fonts-recommended \
+    texlive-plain-generic && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create alternative for nano -> nano-tiny
@@ -208,18 +234,27 @@ USER ${NB_UID}
 ################# Dependency: jupyter/scipy-notebook #######################
 ############################################################################
 
-FROM minimal AS scipy
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 ARG OWNER=jupyter
 
 LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
 
+# Fix: https://github.com/hadolint/hadolint/wiki/DL4006
+# Fix: https://github.com/koalaman/shellcheck/wiki/SC3014
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 USER root
 
-# ffmpeg for matplotlib anim & dvipng+cm-super for latex labels
 RUN apt-get update --yes && \
-    apt-get install --yes --no-install-recommends ffmpeg dvipng cm-super && \
+    apt-get install --yes --no-install-recommends \
+    # for cython: https://cython.readthedocs.io/en/latest/src/quickstart/install.html
+    build-essential \
+    # for latex labels
+    cm-super \
+    dvipng \
+    # for matplotlib anim
+    ffmpeg && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 USER ${NB_UID}
@@ -276,19 +311,135 @@ USER ${NB_UID}
 
 WORKDIR "${HOME}"
 
+  ############################################################################
+  ################ Dependency: jupyter/datascience-notebook ##################
+  ############################################################################
+  
+# Copyright (c) Jupyter Development Team.
+# Distributed under the terms of the Modified BSD License.
+ARG OWNER=jupyter
+
+LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
+
+# Fix: https://github.com/hadolint/hadolint/wiki/DL4006
+# Fix: https://github.com/koalaman/shellcheck/wiki/SC3014
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+USER root
+
+# Julia installation
+# Default values can be overridden at build time
+# (ARGS are in lower case to distinguish them from ENV)
+# Check https://julialang.org/downloads/
+ARG julia_version="1.7.3"
+
+# R pre-requisites
+RUN apt-get update --yes && \
+    apt-get install --yes --no-install-recommends \
+    fonts-dejavu \
+    gfortran \
+    gcc && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Julia dependencies
+# install Julia packages in /opt/julia instead of ${HOME}
+ENV JULIA_DEPOT_PATH=/opt/julia \
+    JULIA_PKGDIR=/opt/julia \
+    JULIA_VERSION="${julia_version}"
+
+WORKDIR /tmp
+
+# hadolint ignore=SC2046
+RUN set -x && \
+    julia_arch=$(uname -m) && \
+    julia_short_arch="${julia_arch}" && \
+    if [ "${julia_short_arch}" == "x86_64" ]; then \
+      julia_short_arch="x64"; \
+    fi; \
+    julia_installer="julia-${JULIA_VERSION}-linux-${julia_arch}.tar.gz" && \
+    julia_major_minor=$(echo "${JULIA_VERSION}" | cut -d. -f 1,2) && \
+    mkdir "/opt/julia-${JULIA_VERSION}" && \
+    wget -q "https://julialang-s3.julialang.org/bin/linux/${julia_short_arch}/${julia_major_minor}/${julia_installer}" && \
+    tar xzf "${julia_installer}" -C "/opt/julia-${JULIA_VERSION}" --strip-components=1 && \
+    rm "${julia_installer}" && \
+    ln -fs /opt/julia-*/bin/julia /usr/local/bin/julia
+
+# Show Julia where conda libraries are \
+RUN mkdir /etc/julia && \
+    echo "push!(Libdl.DL_LOAD_PATH, \"${CONDA_DIR}/lib\")" >> /etc/julia/juliarc.jl && \
+    # Create JULIA_PKGDIR \
+    mkdir "${JULIA_PKGDIR}" && \
+    chown "${NB_USER}" "${JULIA_PKGDIR}" && \
+    fix-permissions "${JULIA_PKGDIR}"
+
+USER ${NB_UID}
+
+# R packages including IRKernel which gets installed globally.
+# r-e1071: dependency of the caret R package
+RUN mamba install --quiet --yes \
+    'r-base' \
+    'r-caret' \
+    'r-crayon' \
+    'r-devtools' \
+    'r-e1071' \
+    'r-forecast' \
+    'r-hexbin' \
+    'r-htmltools' \
+    'r-htmlwidgets' \
+    'r-irkernel' \
+    'r-nycflights13' \
+    'r-randomforest' \
+    'r-rcurl' \
+    'r-rmarkdown' \
+    'r-rodbc' \
+    'r-rsqlite' \
+    'r-shiny' \
+    'r-tidyverse' \
+    'unixodbc' && \
+    mamba clean --all -f -y && \
+    fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
+
+# `rpy2` and `r-tidymodels` are not easy to install under aarch64
+RUN set -x && \
+    arch=$(uname -m) && \
+    if [ "${arch}" == "x86_64" ]; then \
+        mamba install --quiet --yes \
+            'rpy2' \
+            'r-tidymodels' && \
+            mamba clean --all -f -y && \
+            fix-permissions "${CONDA_DIR}" && \
+            fix-permissions "/home/${NB_USER}"; \
+    fi;
+
+# Add Julia packages.
+# Install IJulia as jovyan and then move the kernelspec out
+# to the system share location. Avoids problems with runtime UID change not
+# taking effect properly on the .local folder in the jovyan home dir.
+RUN julia -e 'import Pkg; Pkg.update()' && \
+    julia -e 'import Pkg; Pkg.add("HDF5")' && \
+    julia -e 'using Pkg; pkg"add IJulia"; pkg"precompile"' && \
+    # move kernelspec out of home \
+    mv "${HOME}/.local/share/jupyter/kernels/julia"* "${CONDA_DIR}/share/jupyter/kernels/" && \
+    chmod -R go+rx "${CONDA_DIR}/share/jupyter" && \
+    rm -rf "${HOME}/.local" && \
+    fix-permissions "${JULIA_PKGDIR}" "${CONDA_DIR}/share/jupyter"
+
+WORKDIR "${HOME}"
+
 ############################################################################
 ########################## Dependency: gpulibs #############################
 ############################################################################
 
-FROM scipy AS gpu
 LABEL maintainer="Christoph Schranz <christoph.schranz@salzburgresearch.at>"
 
 # Install Tensorflow, check compatibility here:
 # https://www.tensorflow.org/install/source#gpu
 # installation via conda leads to errors in version 4.8.2
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir "tensorflow==2.6.0" && \
-    pip install --no-cache-dir keras
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir "tensorflow==2.8.2"
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir keras==2.8
 
 # Install PyTorch with dependencies
 RUN conda install --quiet --yes \
@@ -300,10 +451,7 @@ RUN conda install --quiet --yes \
 # Check compatibility here:
 # https://pytorch.org/get-started/locally/
 # Installation via conda leads to errors installing cudatoolkit=11.1
-RUN pip install --no-cache-dir torch==1.9.0+cu111 torchvision==0.10.0+cu111 torchaudio==0.9.0 -f \
-    https://download.pytorch.org/whl/torch_stable.html
-
-RUN pip install --no-cache-dir torchviz
+RUN pip install --no-cache-dir torch torchvision torchaudio torchviz --extra-index-url https://download.pytorch.org/whl/cu116
 
 USER root
 
@@ -323,7 +471,54 @@ RUN fix-permissions "/home/$NB_USER"
 
 USER $NB_UID
 
-FROM gpu AS final
+  ############################################################################
+  ############################ Useful packages ###############################
+  ############################################################################
+  
+LABEL authors="Christoph Schranz <christoph.schranz@salzburgresearch.at>, Mathematical Michael <consistentbayes@gmail.com>"
+
+USER root
+
+RUN conda install --quiet --yes \
+    black isort jupyterlab_code_formatter && \
+    conda clean --all -f -y && \
+    fix-permissions "$CONDA_DIR" && \
+    fix-permissions "/home/$NB_USER"
+
+RUN pip install --no-cache-dir ipyleaflet "plotly>=4.14.3" "ipywidgets>=7.5"
+
+# Install important packages and Graphviz
+RUN set -ex \
+ && buildDeps=' \
+    graphviz==0.19.1 \
+' \
+ && apt-get update \
+ && apt-get --no-install-recommends -y install htop apt-utils iputils-ping graphviz libgraphviz-dev openssh-client \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir "$buildDeps"
+
+# Install various extensions
+RUN fix-permissions "$CONDA_DIR"
+
+# RUN jupyter labextension install @jupyterlab/github
+# RUN pip install jupyterlab-git
+RUN pip install --no-cache-dir jupyterlab-drawio
+RUN jupyter nbextension enable --py --sys-prefix ipyleaflet
+RUN jupyter labextension install jupyterlab-plotly
+RUN jupyter labextension install @jupyter-widgets/jupyterlab-manager plotlywidget
+# RUN pip install --no-cache-dir jupyter-tabnine  --user && \
+#   jupyter nbextension install --py jupyter_tabnine --user && \
+#   jupyter nbextension enable --py jupyter_tabnine --user && \
+#   jupyter serverextension enable --py jupyter_tabnine --user
+RUN pip install --no-cache-dir jupyter_contrib_nbextensions \
+  jupyter_nbextensions_configurator rise
+#  jupyter nbextension enable codefolding/main
+RUN jupyter labextension install @ijmbarr/jupyterlab_spellchecker
+
+RUN fix-permissions "/home/$NB_USER"
+
+# Switch back to jovyan to avoid accidental container runs as root
+USER $NB_UID
+
 # Copy jupyter_notebook_config.json
 COPY jupyter_notebook_config.json /etc/jupyter/
-COPY jupyterlab_theme.json "/home/${NB_USER}/jupyterlab_theme.json"
